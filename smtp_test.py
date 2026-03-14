@@ -1,6 +1,25 @@
 #!/usr/bin/env python3
 """
-SMTP Connection Test for Gmail
+smtp_test.py – Step-by-step SMTP connection diagnostic
+=======================================================
+Tests the SMTP configuration stored in ``.env`` through four progressive
+stages:
+
+1. Basic TCP connection to the SMTP server.
+2. STARTTLS negotiation.
+3. Authentication with the configured credentials.
+4. Sending a test email to the configured sender address (self-send).
+
+Run this script when you need to diagnose SMTP connectivity or
+authentication problems::
+
+    python smtp_test.py
+
+Environment variables required (via ``.env``):
+    SMTP_SERVER   – SMTP server hostname (default ``smtp.gmail.com``).
+    SMTP_PORT     – SMTP server port (default ``587``).
+    SMTP_USERNAME – SMTP login username.
+    SMTP_PASSWORD – SMTP password or App Password.
 """
 
 import smtplib
@@ -13,7 +32,20 @@ from dotenv import load_dotenv
 load_dotenv()
 
 def test_smtp_connection():
-    """Test SMTP connection with different methods"""
+    """Run a four-stage SMTP connectivity and authentication test.
+
+    Stages
+    ------
+    1. Basic TCP connection – verifies the server is reachable on the
+       configured port.
+    2. TLS upgrade – verifies STARTTLS can be established.
+    3. Authentication – verifies the configured credentials are accepted.
+    4. Email send – sends a self-addressed test message to confirm end-to-end
+       delivery.
+
+    Prints ``[OK]`` or ``[ERROR]`` for each stage. Aborts on the first
+    failure and prints possible remediation steps.
+    """
     
     smtp_server = os.getenv('SMTP_SERVER', 'smtp.gmail.com')
     smtp_port = int(os.getenv('SMTP_PORT', '587'))

@@ -1,6 +1,25 @@
 #!/usr/bin/env python3
 """
-Gmail SMTP Fix - Multiple connection methods
+smtp_fix.py – Gmail SMTP multi-method diagnostic
+=================================================
+Attempts to establish a Gmail SMTP connection using three different
+methods in order to identify which configuration works in the current
+network environment:
+
+* **Method 1** – Port 587 with STARTTLS (standard approach).
+* **Method 2** – Port 465 with SSL (``SMTP_SSL``).
+* **Method 3** – Port 587 with a custom SSL context (lowered security level).
+
+If a working method is found the script can optionally update the ``.env``
+file to use that method.
+
+Usage::
+
+    python smtp_fix.py
+
+Environment variables required (via ``.env``):
+    SMTP_USERNAME – Your Gmail address.
+    SMTP_PASSWORD – Your Gmail App Password (16 characters).
 """
 
 import smtplib
@@ -13,7 +32,22 @@ from dotenv import load_dotenv
 load_dotenv()
 
 def test_gmail_methods():
-    """Test different Gmail SMTP connection methods"""
+    """Attempt Gmail SMTP connections via three different methods.
+
+    Tries each method in sequence and returns the identifier of the first one
+    that successfully authenticates.
+
+    Methods tried
+    -------------
+    * ``"method1"`` – Port 587 with STARTTLS (debug output enabled).
+    * ``"method2"`` – Port 465 with ``SMTP_SSL`` and default SSL context.
+    * ``"method3"`` – Port 587 with a custom SSL context (``SECLEVEL=1``).
+
+    Returns:
+        str or None: The method identifier string (``"method1"``,
+        ``"method2"``, or ``"method3"``) if one succeeded, or ``None`` if
+        all methods failed.
+    """
     
     username = os.getenv('SMTP_USERNAME')
     password = os.getenv('SMTP_PASSWORD')
@@ -64,7 +98,15 @@ def test_gmail_methods():
     return None
 
 def update_env_for_working_method(method):
-    """Update .env file with working SMTP settings"""
+    """Optionally update the ``.env`` file to use the working SMTP method.
+
+    Currently handles automatic updates for ``"method2"`` (port 465 / SSL).
+    For ``"method3"`` a message is printed advising manual code changes.
+
+    Args:
+        method: Method identifier returned by :func:`test_gmail_methods`
+                (``"method1"``, ``"method2"``, or ``"method3"``).
+    """
     
     if method == "method2":
         # Update to use SSL port 465

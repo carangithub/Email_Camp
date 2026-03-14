@@ -1,6 +1,30 @@
 #!/usr/bin/env python3
 """
-Generate Word Document for Email Campaign Manager Project
+create_word_doc.py – Project documentation generator
+======================================================
+Generates a comprehensive Word (``.docx``) document covering all aspects
+of the Email Campaign Manager project, including:
+
+* Project overview and system requirements
+* Features and capabilities
+* System architecture and database schema
+* Installation and configuration guide
+* User guide with code examples
+* API documentation summary
+* Security considerations
+* Troubleshooting guide
+* Performance tips
+* Future enhancements roadmap
+
+Usage::
+
+    pip install python-docx   # one-time installation
+    python create_word_doc.py
+
+Output: ``Email_Campaign_Manager_Documentation.docx`` in the current directory.
+
+Requirements:
+    python-docx >= 0.8.11
 """
 
 from docx import Document
@@ -11,7 +35,20 @@ from docx.oxml.shared import OxmlElement, qn
 import os
 
 def create_project_documentation():
-    """Create comprehensive Word documentation for the project"""
+    """Generate a comprehensive Word document for the Email Campaign Manager.
+
+    Creates a fully formatted ``.docx`` file with sections covering every
+    aspect of the project (see module docstring for the full outline).
+    The document is saved as ``Email_Campaign_Manager_Documentation.docx``
+    in the current working directory.
+
+    Returns:
+        str: Path to the generated ``.docx`` file.
+
+    Raises:
+        ImportError: If ``python-docx`` is not installed. The script will
+                     prompt you to install it automatically.
+    """
     
     # Create new document
     doc = Document()
