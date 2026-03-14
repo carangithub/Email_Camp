@@ -1,3 +1,31 @@
+"""
+mail.py – Email Campaign Manager
+=================================
+Core module for the Email Campaign Manager application.
+
+Provides the following public API:
+
+Classes
+-------
+EmailStatus     : Enum of possible email delivery states.
+Contact         : Dataclass representing a single email contact.
+EmailTemplate   : Dataclass representing a reusable email template.
+Campaign        : Dataclass representing a bulk email campaign.
+EmailCampaignManager : Main controller – manages contacts, templates,
+                       campaigns, and SMTP delivery via MongoDB.
+
+Usage
+-----
+    from mail import EmailCampaignManager, Contact, EmailTemplate, Campaign
+
+    manager = EmailCampaignManager()
+    manager.add_contact(Contact(email="user@example.com", first_name="User"))
+    ...
+    manager.close()
+
+Configuration is read from a ``.env`` file (see ``.env.example``).
+"""
+
 import smtplib
 import ssl
 from email.mime.text import MIMEText
@@ -27,6 +55,16 @@ logger = logging.getLogger(__name__)
 
 
 class EmailStatus(Enum):
+    """Enum representing the delivery status of a single email.
+
+    Members
+    -------
+    PENDING : Email is queued but has not been sent yet.
+    SENT    : Email was delivered successfully.
+    FAILED  : Delivery failed (SMTP error or exception).
+    BOUNCED : Email was rejected / bounced by the receiving server.
+    """
+
     PENDING = "pending"
     SENT = "sent"
     FAILED = "failed"
@@ -35,6 +73,24 @@ class EmailStatus(Enum):
 
 @dataclass
 class Contact:
+    """Dataclass representing a single email contact.
+
+    Attributes
+    ----------
+    email : str
+        Primary identifier – must be a valid, unique email address.
+    first_name : str, optional
+        Contact's first name (default ``""``).
+    last_name : str, optional
+        Contact's last name (default ``""``).
+    company : str, optional
+        Contact's company or organisation (default ``""``).
+    custom_fields : dict, optional
+        Arbitrary key/value pairs for any additional contact data
+        (e.g. ``{"department": "Sales", "city": "NYC"}``).
+        Initialised to ``{}`` if not provided.
+    """
+
     email: str
     first_name: str = ""
     last_name: str = ""
@@ -48,6 +104,25 @@ class Contact:
 
 @dataclass
 class EmailTemplate:
+    """Dataclass representing a reusable email template.
+
+    Attributes
+    ----------
+    name : str
+        Unique template name used to look up the template.
+    subject : str
+        Email subject line. Supports ``{{placeholder}}`` tokens.
+    body : str
+        Plain-text email body. Supports ``{{placeholder}}`` tokens.
+    html_body : str, optional
+        HTML email body (default ``""``). When provided it is attached
+        as an ``alternative`` MIME part alongside the plain-text body.
+        Supports ``{{placeholder}}`` tokens.
+    created_at : datetime, optional
+        Creation timestamp. Set automatically to ``datetime.now()`` if
+        not provided.
+    """
+
     name: str
     subject: str
     body: str
@@ -61,6 +136,30 @@ class EmailTemplate:
 
 @dataclass
 class Campaign:
+    """Dataclass representing a bulk email campaign.
+
+    Attributes
+    ----------
+    name : str
+        Unique campaign name.
+    template_id : str
+        MongoDB ``_id`` (as a string) of the :class:`EmailTemplate` to use.
+    contact_list_ids : list of str
+        MongoDB ``_id`` strings of the contact lists to target.
+    created_at : datetime, optional
+        Creation timestamp; set automatically to ``datetime.now()``.
+    sent_at : datetime, optional
+        Timestamp when ``send_campaign()`` completed; set automatically.
+    status : str
+        ``"draft"`` before sending, ``"sent"`` after a successful send.
+    total_recipients : int
+        Total unique contacts targeted (updated after sending).
+    sent_count : int
+        Number of emails successfully delivered (updated after sending).
+    failed_count : int
+        Number of emails that failed to deliver (updated after sending).
+    """
+
     name: str
     template_id: str
     contact_list_ids: List[str]
@@ -126,7 +225,18 @@ class EmailCampaignManager:
         self.from_name = os.getenv('FROM_NAME', 'Email Campaign Manager')
 
     def configure_smtp(self, server: str, port: int, username: str, password: str, use_tls: bool = True):
-        """Configure SMTP settings for email delivery"""
+        """Configure SMTP settings for email delivery.
+
+        Overrides any settings previously loaded from environment variables.
+
+        Args:
+            server:   SMTP server hostname (e.g. ``"smtp.gmail.com"``).
+            port:     SMTP server port (e.g. ``587`` for STARTTLS, ``465`` for SSL).
+            username: SMTP login username (typically your email address).
+            password: SMTP password or App Password.
+            use_tls:  If ``True``, STARTTLS is used to upgrade the connection.
+                      Set to ``False`` when using SSL directly on port 465.
+        """
         self.smtp_config = {
             'server': server,
             'port': port,
@@ -137,12 +247,29 @@ class EmailCampaignManager:
         logger.info(f"SMTP configured for server: {server}")
 
     def validate_email(self, email: str) -> bool:
-        """Validate email address format"""
+        """Validate an email address format using a regex pattern.
+
+        Args:
+            email: The email address string to validate.
+
+        Returns:
+            ``True`` if the address matches a standard email pattern,
+            ``False`` otherwise.
+        """
         pattern = r'^[a-zA-Z0-9._%+-]+@([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$'
         return re.match(pattern, email) is not None
 
     def get_receiver_emails_from_env(self) -> List[str]:
-        """Get receiver emails from environment variable"""
+        """Parse and validate receiver emails from the ``RECEIVER_EMAILS`` env variable.
+
+        Reads the ``RECEIVER_EMAILS`` environment variable (a comma-separated
+        list of addresses) and returns only those that pass :meth:`validate_email`.
+        Invalid addresses are skipped and logged as warnings.
+
+        Returns:
+            List of valid email address strings. Empty list if ``RECEIVER_EMAILS``
+            is not set or contains no valid addresses.
+        """
         receiver_emails_str = os.getenv('RECEIVER_EMAILS', '')
         if not receiver_emails_str:
             return []
@@ -162,7 +289,18 @@ class EmailCampaignManager:
 
     # Contact Management
     def add_contact(self, contact: Contact) -> str:
-        """Add a new contact to the database"""
+        """Add a new contact to the ``contacts`` collection.
+
+        Args:
+            contact: A :class:`Contact` instance to persist.
+
+        Returns:
+            The MongoDB ``_id`` string of the newly inserted document.
+
+        Raises:
+            ValueError: If ``contact.email`` is not a valid email address.
+            ValueError: If a contact with that email already exists.
+        """
         if not self.validate_email(contact.email):
             raise ValueError(f"Invalid email address: {contact.email}")
 
@@ -177,7 +315,14 @@ class EmailCampaignManager:
             raise ValueError(f"Contact with email {contact.email} already exists")
 
     def get_contact(self, email: str) -> Optional[Contact]:
-        """Retrieve a contact by email"""
+        """Retrieve a contact by their email address.
+
+        Args:
+            email: The email address to look up.
+
+        Returns:
+            A :class:`Contact` instance if found, or ``None``.
+        """
         contact_doc = self.contacts_collection.find_one({"email": email})
         if contact_doc:
             contact_doc.pop('_id', None)
@@ -186,7 +331,15 @@ class EmailCampaignManager:
         return None
 
     def update_contact(self, email: str, updates: Dict) -> bool:
-        """Update an existing contact"""
+        """Update fields on an existing contact using a MongoDB ``$set`` operation.
+
+        Args:
+            email:   Email address of the contact to update.
+            updates: Dictionary of field names and their new values.
+
+        Returns:
+            ``True`` if the contact was found and modified; ``False`` otherwise.
+        """
         updates['updated_at'] = datetime.now()
         result = self.contacts_collection.update_one(
             {"email": email},
@@ -198,7 +351,14 @@ class EmailCampaignManager:
         return False
 
     def delete_contact(self, email: str) -> bool:
-        """Delete a contact"""
+        """Remove a contact from the database by email address.
+
+        Args:
+            email: Email address of the contact to delete.
+
+        Returns:
+            ``True`` if deleted; ``False`` if no matching contact was found.
+        """
         result = self.contacts_collection.delete_one({"email": email})
         if result.deleted_count > 0:
             logger.info(f"Contact deleted: {email}")
@@ -247,7 +407,18 @@ class EmailCampaignManager:
 
     # Contact List Management
     def create_contact_list(self, name: str, description: str = "") -> str:
-        """Create a new contact list"""
+        """Create a new named contact list.
+
+        Args:
+            name:        Unique name for the contact list.
+            description: Optional human-readable description.
+
+        Returns:
+            MongoDB ``_id`` string of the newly created list.
+
+        Raises:
+            ValueError: If a contact list with that name already exists.
+        """
         list_doc = {
             'name': name,
             'description': description,
@@ -263,7 +434,19 @@ class EmailCampaignManager:
             raise ValueError(f"Contact list with name '{name}' already exists")
 
     def add_contacts_to_list(self, list_name: str, emails: List[str]) -> int:
-        """Add contacts to a contact list"""
+        """Add one or more contacts (by email) to an existing contact list.
+
+        Contacts are looked up by their email address. Only contacts that exist
+        in the ``contacts`` collection are added. Duplicate entries are
+        prevented via MongoDB's ``$addToSet`` operator.
+
+        Args:
+            list_name: Name of the target contact list.
+            emails:    List of email addresses to add.
+
+        Returns:
+            Number of contacts successfully added to the list.
+        """
         # Get contact IDs for the emails
         contact_ids = []
         for email in emails:
@@ -282,7 +465,15 @@ class EmailCampaignManager:
         return 0
 
     def get_contact_list_contacts(self, list_name: str) -> List[Contact]:
-        """Get all contacts in a contact list"""
+        """Return all contacts that belong to a named contact list.
+
+        Args:
+            list_name: Name of the contact list to query.
+
+        Returns:
+            List of :class:`Contact` instances. Returns an empty list if
+            the list does not exist or contains no contacts.
+        """
         list_doc = self.contact_lists_collection.find_one({"name": list_name})
         if not list_doc:
             return []
@@ -299,7 +490,17 @@ class EmailCampaignManager:
 
     # Template Management
     def save_template(self, template: EmailTemplate) -> str:
-        """Save an email template"""
+        """Persist a new email template to the ``templates`` collection.
+
+        Args:
+            template: An :class:`EmailTemplate` instance to save.
+
+        Returns:
+            MongoDB ``_id`` string of the newly inserted document.
+
+        Raises:
+            ValueError: If a template with that name already exists.
+        """
         try:
             template_dict = asdict(template)
             result = self.templates_collection.insert_one(template_dict)
@@ -309,7 +510,14 @@ class EmailCampaignManager:
             raise ValueError(f"Template with name '{template.name}' already exists")
 
     def get_template(self, name: str) -> Optional[EmailTemplate]:
-        """Retrieve a template by name"""
+        """Retrieve an email template by its unique name.
+
+        Args:
+            name: The template name to look up.
+
+        Returns:
+            An :class:`EmailTemplate` instance if found, or ``None``.
+        """
         template_doc = self.templates_collection.find_one({"name": name})
         if template_doc:
             template_doc.pop('_id', None)
@@ -317,12 +525,23 @@ class EmailCampaignManager:
         return None
 
     def list_templates(self) -> List[str]:
-        """List all template names"""
+        """Return the names of all saved email templates.
+
+        Returns:
+            List of template name strings (may be empty).
+        """
         templates = self.templates_collection.find({}, {"name": 1})
         return [template['name'] for template in templates]
 
     def delete_template(self, name: str) -> bool:
-        """Delete a template"""
+        """Delete an email template by name.
+
+        Args:
+            name: Name of the template to remove.
+
+        Returns:
+            ``True`` if deleted; ``False`` if not found.
+        """
         result = self.templates_collection.delete_one({"name": name})
         if result.deleted_count > 0:
             logger.info(f"Template deleted: {name}")
@@ -331,11 +550,26 @@ class EmailCampaignManager:
 
     # Email Personalization
     def personalize_email(self, template_content: str, contact: Contact) -> str:
-        """
-        Personalize email content with contact information
+        """Replace ``{{placeholder}}`` tokens in a string with contact field values.
 
-        Supports placeholders like {{first_name}}, {{last_name}}, {{email}}, {{company}}
-        and custom fields like {{custom.field_name}}
+        Supported placeholders
+        ----------------------
+        ``{{first_name}}``       → ``contact.first_name``
+        ``{{last_name}}``        → ``contact.last_name``
+        ``{{full_name}}``        → ``first_name + " " + last_name`` (stripped)
+        ``{{email}}``            → ``contact.email``
+        ``{{company}}``          → ``contact.company``
+        ``{{custom.FIELD}}``     → ``contact.custom_fields["FIELD"]``
+
+        Unknown placeholders are left unchanged.
+
+        Args:
+            template_content: Raw string containing zero or more
+                              ``{{placeholder}}`` tokens.
+            contact:          :class:`Contact` whose data will be substituted.
+
+        Returns:
+            The personalised string with all known placeholders replaced.
         """
         content = template_content
 
@@ -362,7 +596,33 @@ class EmailCampaignManager:
     # Email Sending
     def send_single_email(self, to_email: str, subject: str, body: str, html_body: str = "",
                           attachments: List[str] = None) -> bool:
-        """Send a single email"""
+        """Send a single email via the configured SMTP server.
+
+        Builds a ``multipart/alternative`` MIME message. If ``html_body`` is
+        provided it is attached as the ``text/html`` alternative part.
+        File attachments are added as ``application/octet-stream`` parts.
+
+        The connection uses STARTTLS (port 587) when ``smtp_config['use_tls']``
+        is ``True``, which is the default. ``ehlo('gmail.com')`` is called
+        before and after ``STARTTLS`` to satisfy Gmail's requirements.
+
+        A log entry is written to the ``email_logs`` collection regardless of
+        success or failure.
+
+        Args:
+            to_email:    Recipient email address.
+            subject:     Email subject line.
+            body:        Plain-text email body.
+            html_body:   HTML email body (optional; default ``""``).
+            attachments: List of file paths to attach (optional).
+
+        Returns:
+            ``True`` if the email was sent successfully; ``False`` on failure.
+
+        Raises:
+            ValueError: If SMTP is not configured (``smtp_config['server']``
+                        is empty).
+        """
         if not self.smtp_config['server']:
             raise ValueError("SMTP configuration not set. Use configure_smtp() first.")
 
@@ -421,7 +681,17 @@ class EmailCampaignManager:
             return False
 
     def log_email(self, to_email: str, subject: str, status: str, error_message: str = ""):
-        """Log email send attempt"""
+        """Record an email delivery attempt in the ``email_logs`` collection.
+
+        Called automatically by :meth:`send_single_email` after each send
+        attempt. Each log entry includes a UTC timestamp.
+
+        Args:
+            to_email:      Recipient address.
+            subject:       Email subject.
+            status:        Delivery status string (see :class:`EmailStatus`).
+            error_message: Optional error detail for failed deliveries.
+        """
         log_entry = {
             'to_email': to_email,
             'subject': subject,
@@ -433,7 +703,20 @@ class EmailCampaignManager:
 
     # Campaign Management
     def create_campaign(self, campaign: Campaign) -> str:
-        """Create a new email campaign"""
+        """Persist a new campaign to the ``campaigns`` collection.
+
+        The campaign is saved with ``status="draft"``. Use
+        :meth:`send_campaign` to execute it.
+
+        Args:
+            campaign: A :class:`Campaign` instance to save.
+
+        Returns:
+            MongoDB ``_id`` string of the newly inserted campaign document.
+
+        Raises:
+            ValueError: If a campaign with that name already exists.
+        """
         try:
             campaign_dict = asdict(campaign)
             result = self.campaigns_collection.insert_one(campaign_dict)
@@ -531,7 +814,19 @@ class EmailCampaignManager:
         return stats
 
     def get_campaign_stats(self, campaign_name: str) -> Dict:
-        """Get campaign statistics"""
+        """Return delivery statistics for a campaign.
+
+        Args:
+            campaign_name: Name of the campaign to query.
+
+        Returns:
+            Dictionary with keys:
+            ``name``, ``status``, ``total_recipient``,
+            ``sent_count``, ``failed_count``, ``created_at``, ``sent_at``.
+
+        Raises:
+            ValueError: If no campaign with that name exists.
+        """
         campaign_doc = self.campaigns_collection.find_one({"name": campaign_name})
         if not campaign_doc:
             raise ValueError(f"Campaign not found: {campaign_name}")
@@ -547,13 +842,28 @@ class EmailCampaignManager:
         }
 
     def list_campaigns(self) -> List[str]:
-        """List all campaign names"""
+        """Return the names of all campaigns in the database.
+
+        Returns:
+            List of campaign name strings (may be empty).
+        """
         campaigns = self.campaigns_collection.find({}, {"name": 1})
         return [campaign['name'] for campaign in campaigns]
 
     # Utility Methods
     def get_email_logs(self, limit: int = 100, status_filter: str = None) -> List[Dict]:
-        """Get email sending logs"""
+        """Retrieve recent email delivery log entries, newest first.
+
+        Args:
+            limit:         Maximum number of log entries to return (default ``100``).
+            status_filter: If provided, only entries with this status value are
+                           returned (e.g. ``"failed"``, ``"sent"``).
+
+        Returns:
+            List of log dictionaries. Each dict contains:
+            ``to_email``, ``subject``, ``status``, ``timestamp``,
+            ``error_message``.
+        """
         query = {}
         if status_filter:
             query['status'] = status_filter
@@ -562,7 +872,15 @@ class EmailCampaignManager:
         return list(logs)
 
     def cleanup_old_logs(self, days_old: int = 30):
-        """Remove email logs older than specified days"""
+        """Delete email log entries older than a specified number of days.
+
+        Useful for keeping the ``email_logs`` collection lean in long-running
+        deployments. Call periodically (e.g. via a scheduled task).
+
+        Args:
+            days_old: Entries older than this many days will be deleted
+                      (default ``30``).
+        """
         from datetime import timedelta
 
         cutoff_date = datetime.now() - timedelta(days=days_old)
@@ -570,7 +888,13 @@ class EmailCampaignManager:
         logger.info(f"Cleaned up {result.deleted_count} old email logs")
 
     def export_contacts(self, output_file: str, contact_list_name: str = None):
-        """Export contacts to CSV file"""
+        """Export contacts to a CSV file using pandas.
+
+        Args:
+            output_file:         Destination file path (e.g. ``"contacts.csv"``).
+            contact_list_name:   If provided, exports only contacts in that
+                                 list; otherwise all contacts are exported.
+        """
         import pandas as pd
 
         if contact_list_name:
@@ -592,7 +916,11 @@ class EmailCampaignManager:
         logger.info(f"Exported {len(contacts)} contacts to {output_file}")
 
     def close(self):
-        """Close database connection"""
+        """Close the MongoDB client connection.
+
+        Always call this method when you are finished with the manager to
+        release the connection pool cleanly.
+        """
         self.client.close()
         logger.info("Database connection closed")
 

@@ -1,13 +1,50 @@
 #!/usr/bin/env python3
 """
-Test script for Email Campaign Manager setup verification
+test_setup.py – Setup verification for Email Campaign Manager
+==============================================================
+Checks that the application is correctly configured before you attempt
+to send any emails. Performs the following verifications:
+
+1. MongoDB connection – initialises :class:`~mail.EmailCampaignManager`
+   and confirms it can connect to the database.
+2. SMTP / email settings – prints the SMTP server, port, username, sender
+   address, and display name read from ``.env``.
+3. Receiver email configuration – parses ``RECEIVER_EMAILS`` and reports
+   how many valid addresses are configured.
+4. Email validation – smoke-tests the regex validator against a known-good
+   address.
+5. Database collection document counts – lists the number of documents in
+   each MongoDB collection.
+6. Environment variable status – reports whether each expected ``.env``
+   variable is set or missing.
+
+Usage::
+
+    python test_setup.py
+
+Exit codes:
+    0 – all checks passed.
+    1 – an exception was raised (printed to stdout with a traceback).
 """
 
 from mail import EmailCampaignManager, Contact, EmailTemplate, Campaign
 import os
 
 def test_setup():
-    """Test the email campaign manager setup"""
+    """Run all setup verification checks and print a structured report.
+
+    Checks performed
+    ----------------
+    * MongoDB connection via :class:`~mail.EmailCampaignManager` initialisation.
+    * SMTP configuration values loaded from environment variables.
+    * Receiver email list parsed from ``RECEIVER_EMAILS``.
+    * Email address regex validation (sanity check).
+    * Document counts for all five MongoDB collections.
+    * Presence / absence of every expected environment variable.
+
+    Prints a human-readable report to stdout. Raises any unhandled
+    exception so the caller (``__main__``) can display a traceback.
+    """
     
     print("=" * 60)
     print("EMAIL CAMPAIGN MANAGER - SETUP TEST")
